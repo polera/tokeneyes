@@ -1,0 +1,28 @@
+model: gpt-5.5
+models:
+  - gpt-5.6
+  - claude-opus-4-8
+  - claude-sonnet-5
+  - gemini-3.5-flash
+output_tokens: [1000, 4000, 16000]
+reasoning_tokens: 0
+cached_tokens: 0
+profile: none
+max_file_bytes: 5242880
+max_total_bytes: 104857600
+max_media_size: 52428800
+max_media_count: 100
+max_pages: 600
+max_duration: 4h
+processing: native
+image_detail: auto
+document_detail: auto
+transcripts: []
+overrides:
+  - glob: "archive/**/*.pdf"
+    processing: normalized-text
+    document_detail: text
+workers: 4
+no_save: false
+fail_incomplete: false
+fail_overflow: false

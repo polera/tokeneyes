@@ -1,0 +1,6 @@
+/tokeneyes
+*.db
+*.db-shm
+*.db-wal
+plan*
+.DS_Store
