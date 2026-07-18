@@ -86,6 +86,7 @@ func (FileCollector) Collect(ctx context.Context, req CollectRequest) (Collectio
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(root, p)
 		}
+		// #nosec G304 -- reading a caller-named prompt file is the documented purpose of --prompt-file.
 		b, readErr := os.ReadFile(p)
 		if readErr != nil {
 			return Collection{}, fmt.Errorf("read prompt file: %w", readErr)
@@ -216,6 +217,7 @@ func collectFile(abs, root string, req CollectRequest, seen map[string]bool, out
 		out.Incomplete = true
 		return
 	}
+	// #nosec G304 -- abs is a collection target the caller asked to be counted.
 	b, err := os.ReadFile(abs)
 	if err != nil {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", rel, err))
@@ -298,6 +300,7 @@ func attachTranscripts(root string, req CollectRequest, out *Collection) error {
 		if !filepath.IsAbs(textPath) {
 			textPath = filepath.Join(root, textPath)
 		}
+		// #nosec G304 -- reading a caller-named transcript file is the documented purpose of --transcript.
 		b, err := os.ReadFile(textPath)
 		if err != nil {
 			return fmt.Errorf("read transcript %s: %w", parts[1], err)
@@ -393,6 +396,8 @@ func requestedPaths(ctx context.Context, root string, req CollectRequest) ([]str
 }
 
 func gitFiles(ctx context.Context, root string, args ...string) ([]string, error) {
+	// #nosec G204 -- args are compile-time literals from the preset switch; root is
+	// passed as a -C operand to git, not to a shell.
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
 	b, err := cmd.Output()
 	if err != nil {
@@ -452,6 +457,7 @@ func shouldSkipDir(rel string, includeHidden bool) bool {
 func loadIgnoreRules(root string) []ignoreRule {
 	var rules []ignoreRule
 	for _, name := range []string{".gitignore", ".tokeneyesignore"} {
+		// #nosec G304 -- name is one of two literals joined onto the collection root.
 		f, err := os.Open(filepath.Join(root, name))
 		if err != nil {
 			continue

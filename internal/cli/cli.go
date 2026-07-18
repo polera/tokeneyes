@@ -612,6 +612,7 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 func readText(path string) (string, error) {
+	// #nosec G304 -- path comes from a flag whose purpose is to name a file to read.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", err

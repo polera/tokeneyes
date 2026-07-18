@@ -2,7 +2,7 @@
 
 TokenEyes is an offline-first Go CLI for estimating mixed text, image, audio, and document usage across OpenAI/Codex, Claude, and Gemini models. It reports per-modality formulas, bounded estimates, capability status, request planning, context fit, fixed-point API cost scenarios, and privacy-safe local history.
 
-Repository content stays local unless `--verify` is explicitly supplied. Saved runs contain source labels/paths, SHA-256 hashes, byte counts, token results, and configuration—never source or prompt contents.
+Repository content stays local unless `--verify` is explicitly supplied. Saved runs contain source labels/paths, SHA-256 hashes, byte counts, token results, and configuration, never source or prompt contents.
 
 ## Install
 

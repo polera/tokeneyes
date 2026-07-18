@@ -60,6 +60,7 @@ func LoadCatalog(override string) (Catalog, error) {
 	if override == "" {
 		return c, c.Validate()
 	}
+	// #nosec G304 -- override is the caller-supplied catalog path.
 	b, err := os.ReadFile(override)
 	if err != nil {
 		return Catalog{}, err

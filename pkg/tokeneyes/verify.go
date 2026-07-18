@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -104,7 +105,7 @@ func (v *HTTPVerifier) verifyAnthropic(ctx context.Context, model Model, a Assem
 				content = append(content, map[string]any{"type": "document", "source": map[string]any{"type": "base64", "media_type": part.MIME, "data": base64.StdEncoding.EncodeToString(part.Data)}})
 			}
 		default:
-			return VerificationResult{}, fmt.Errorf("Anthropic count endpoint cannot accept %s", part.Type)
+			return VerificationResult{}, fmt.Errorf("anthropic count endpoint cannot accept %s", part.Type)
 		}
 	}
 	payload := map[string]any{"model": model.ID, "messages": []any{map[string]any{"role": "user", "content": content}}}
@@ -254,7 +255,7 @@ func (v *HTTPVerifier) uploadAnthropicFile(ctx context.Context, key string, part
 		return "", err
 	}
 	if response.ID == "" {
-		return "", fmt.Errorf("Anthropic file upload returned no id")
+		return "", fmt.Errorf("anthropic file upload returned no id")
 	}
 	return response.ID, nil
 }
@@ -294,14 +295,17 @@ func (v *HTTPVerifier) uploadGeminiFile(ctx context.Context, key string, part Re
 	if err != nil {
 		return "", "", err
 	}
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
+	_, drainErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	drainErr = errors.Join(drainErr, resp.Body.Close())
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("Gemini upload start returned HTTP %d", resp.StatusCode)
+		return "", "", fmt.Errorf("gemini upload start returned HTTP %d", resp.StatusCode)
+	}
+	if drainErr != nil {
+		return "", "", drainErr
 	}
 	uploadURL := resp.Header.Get("X-Goog-Upload-URL")
 	if uploadURL == "" {
-		return "", "", fmt.Errorf("Gemini upload start returned no upload URL")
+		return "", "", fmt.Errorf("gemini upload start returned no upload URL")
 	}
 	req, err = http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(part.Data))
 	if err != nil {
@@ -320,7 +324,7 @@ func (v *HTTPVerifier) uploadGeminiFile(ctx context.Context, key string, part Re
 		return "", "", err
 	}
 	if completed.File.Name == "" || completed.File.URI == "" {
-		return "", "", fmt.Errorf("Gemini file upload returned incomplete reference")
+		return "", "", fmt.Errorf("gemini file upload returned incomplete reference")
 	}
 	return completed.File.Name, completed.File.URI, nil
 }
@@ -342,17 +346,17 @@ func (v *HTTPVerifier) deleteGeminiFiles(names []string, key string) error {
 	return first
 }
 
-func doStatus(client *http.Client, req *http.Request) error {
+func doStatus(client *http.Client, req *http.Request) (err error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	defer func() { err = errors.Join(err, resp.Body.Close()) }()
+	_, drainErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("provider cleanup returned HTTP %d", resp.StatusCode)
 	}
-	return nil
+	return drainErr
 }
 
 func doJSON(client *http.Client, req *http.Request, out any) error {

@@ -318,6 +318,9 @@ func inspectWAV(b []byte) (AudioMetadata, error) {
 			byteRate = binary.LittleEndian.Uint32(b[p+8 : p+12])
 		}
 		if kind == "data" {
+			if n < 0 || int64(n) > int64(math.MaxUint32) {
+				return m, fmt.Errorf("WAV data chunk size out of range")
+			}
 			dataSize = uint32(n)
 		}
 		p += n + n%2
@@ -374,7 +377,7 @@ func inspectOgg(b []byte) (AudioMetadata, error) {
 		m.DurationMillis = int64(granule) * 1000 / int64(m.SampleRateHz)
 	}
 	if m.DurationMillis == 0 {
-		return m, fmt.Errorf("Ogg duration unavailable")
+		return m, fmt.Errorf("ogg duration unavailable")
 	}
 	return m, nil
 }
@@ -546,7 +549,11 @@ func inspectPDF(b []byte) (DocumentMetadata, []byte, error) {
 			continue
 		}
 		plain, _ := io.ReadAll(io.LimitReader(zr, 8<<20))
-		zr.Close()
+		if e := zr.Close(); e != nil {
+			// A stream that fails to close cleanly is speculative content found
+			// outside the object graph; skip it rather than fail the whole PDF.
+			continue
+		}
 		found := pdfTextRE.FindAllSubmatch(plain, -1)
 		if len(found) > 0 {
 			out.WriteString("[unallocated compressed PDF text]\n")
@@ -586,7 +593,7 @@ func inspectOffice(mime string, b []byte) (DocumentMetadata, []byte, error) {
 	var expanded int64
 	for _, f := range zr.File {
 		if f.UncompressedSize64 > uint64(maxOfficeExpanded) || expanded > maxOfficeExpanded-int64(f.UncompressedSize64) {
-			return m, nil, fmt.Errorf("Office expanded-size limit exceeded")
+			return m, nil, fmt.Errorf("office expanded-size limit exceeded")
 		}
 		expanded += int64(f.UncompressedSize64)
 		if strings.HasPrefix(f.Name, prefix) && strings.HasSuffix(f.Name, ".xml") {
@@ -601,7 +608,9 @@ func inspectOffice(mime string, b []byte) (DocumentMetadata, []byte, error) {
 			return m, nil, e
 		}
 		x, e := io.ReadAll(io.LimitReader(r, 16<<20))
-		r.Close()
+		if cerr := r.Close(); cerr != nil && e == nil {
+			e = cerr
+		}
 		if e != nil {
 			return m, nil, e
 		}

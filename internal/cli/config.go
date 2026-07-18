@@ -50,6 +50,7 @@ func loadConfig(path string, explicit bool) (Config, error) {
 	if path == "" {
 		path = ".tokeneyes.yaml"
 	}
+	// #nosec G304 -- path is the caller-supplied config file, defaulting to .tokeneyes.yaml.
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) && !explicit {
 		return Config{}, nil
