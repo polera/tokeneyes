@@ -31,7 +31,7 @@ tokeneyes estimate README.md 'pkg/**/*.go' --prompt 'Review this code' --model g
 
 # Compare the same tracked repository payload across provider families.
 tokeneyes compare --preset tracked \
-  --models gpt-5.5,claude-sonnet-4-6,gemini-3.5-flash
+  --models gpt-5.5,claude-sonnet-4-6,gemini-3.5-flash --tui
 
 # Read a prompt from stdin and emit stable JSON without saving it.
 printf 'Explain this patch' | tokeneyes estimate --stdin --preset changed --json --no-save
@@ -124,7 +124,9 @@ OpenAI long-context pricing starts above 272,000 input tokens for the applicable
 
 ## Output and CI
 
-Human output is the default. `--json` emits `tokeneyes.run.v2`, preserving phase-one fields and adding privacy-safe `assets`, `request_plan`, `count_components`, `capability_status`, and verification transport metadata. SQLite migration 2 keeps old v1 payloads readable. Source bytes, extracted document text, transcripts, thumbnails, and upload identifiers are never persisted.
+Human output is the default. Add `--tui` to `estimate` or `compare` for a compact terminal dashboard with per-model context bars and expected costs. It respects `NO_COLOR` and the `COLUMNS` environment variable; `--tui` and `--json` are mutually exclusive.
+
+`--json` emits `tokeneyes.run.v2`, preserving phase-one fields and adding privacy-safe `assets`, `request_plan`, `count_components`, `capability_status`, and verification transport metadata. SQLite migration 2 keeps old v1 payloads readable. Source bytes, extracted document text, transcripts, thumbnails, and upload identifiers are never persisted.
 
 Threshold flags have stable exit codes:
 

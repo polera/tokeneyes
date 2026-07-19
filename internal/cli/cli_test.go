@@ -84,3 +84,45 @@ func TestStdinAndConfigFlagOverride(t *testing.T) {
 		t.Fatalf("flag did not override config: %s", stdout.String())
 	}
 }
+
+func TestCompareTUI(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("COLUMNS", "64")
+	app, stdout, stderr, _ := testApp(t, "")
+	code := app.Execute(context.Background(), []string{
+		"compare", "--prompt", "hello world",
+		"--models", "gpt-5.5,claude-sonnet-4-6,gemini-3.5-flash",
+		"--output-tokens", "4000", "--tui", "--no-save",
+	})
+	if code != ExitOK {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"Scanning 1 source", "11 B",
+		"gpt-5.5", "claude-sonnet-4-6", "gemini-3.5-flash",
+		"tok", "% context", "expected", "source content not saved",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("TUI output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "gpt-5.5") > strings.Index(got, "claude-sonnet-4-6") ||
+		strings.Index(got, "claude-sonnet-4-6") > strings.Index(got, "gemini-3.5-flash") {
+		t.Fatalf("TUI did not preserve requested model order:\n%s", got)
+	}
+	if strings.Contains(got, "\x1b[") || strings.Contains(got, "hello world") {
+		t.Fatalf("TUI emitted color or source content with NO_COLOR set:\n%s", got)
+	}
+}
+
+func TestTUIAndJSONAreMutuallyExclusive(t *testing.T) {
+	app, _, stderr, _ := testApp(t, "")
+	code := app.Execute(context.Background(), []string{"estimate", "--prompt", "hello", "--tui", "--json", "--no-save"})
+	if code != ExitUsage {
+		t.Fatalf("code=%d want=%d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr.String(), "--json and --tui cannot be used together") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}

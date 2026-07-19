@@ -73,14 +73,14 @@ func (a *App) Execute(ctx context.Context, args []string) int {
 }
 
 type analysisOptions struct {
-	model, models, prompt, promptFile, preset, system, systemFile, tools, toolsFile                                 string
-	outputTokens, profile, catalogPath, dbPath, maxCost                                                             string
-	processing, imageDetail, documentDetail                                                                         string
-	reasoning, cached, maxFile, maxTotal, maxMedia, maxInput                                                        int64
-	maxDuration                                                                                                     time.Duration
-	workers, maxMediaCount, maxPages                                                                                int
-	transcripts                                                                                                     []string
-	readStdin, verify, requireVerify, allowFileUpload, jsonOut, noSave, failIncomplete, failOverflow, includeHidden bool
+	model, models, prompt, promptFile, preset, system, systemFile, tools, toolsFile                                      string
+	outputTokens, profile, catalogPath, dbPath, maxCost                                                                  string
+	processing, imageDetail, documentDetail                                                                              string
+	reasoning, cached, maxFile, maxTotal, maxMedia, maxInput                                                             int64
+	maxDuration                                                                                                          time.Duration
+	workers, maxMediaCount, maxPages                                                                                     int
+	transcripts                                                                                                          []string
+	readStdin, verify, requireVerify, allowFileUpload, jsonOut, tui, noSave, failIncomplete, failOverflow, includeHidden bool
 }
 
 func (a *App) runAnalysis(ctx context.Context, command string, args []string, cfg Config) int {
@@ -157,6 +157,7 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 	fs.BoolVar(&o.requireVerify, "require-verification", false, "fail if exact verification is unavailable")
 	fs.BoolVar(&o.allowFileUpload, "allow-file-upload", false, "authorize temporary provider file uploads during verification")
 	fs.BoolVar(&o.jsonOut, "json", false, "emit stable versioned JSON")
+	fs.BoolVar(&o.tui, "tui", false, "emit a compact terminal dashboard")
 	fs.BoolVar(&o.noSave, "no-save", o.noSave, "do not save run history")
 	fs.StringVar(&o.dbPath, "db", o.dbPath, "history database path")
 	fs.StringVar(&o.catalogPath, "catalog", o.catalogPath, "JSON model-catalog override")
@@ -166,6 +167,10 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 	fs.BoolVar(&o.failOverflow, "fail-overflow", o.failOverflow, "fail when input exceeds a context window")
 	_ = fs.String("config", "", "configuration file")
 	if err := fs.Parse(args); err != nil {
+		return ExitUsage
+	}
+	if o.jsonOut && o.tui {
+		a.error(errors.New("--json and --tui cannot be used together"))
 		return ExitUsage
 	}
 	if !oneOf(o.processing, "native", "normalized-text") {
@@ -328,6 +333,8 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 	}
 	if o.jsonOut {
 		_ = writeJSON(a.Stdout, run)
+	} else if o.tui {
+		printTUI(a.Stdout, run, !o.noSave)
 	} else {
 		printRun(a.Stdout, run, !o.noSave)
 	}
@@ -595,8 +602,8 @@ func (a *App) usage() {
 	fmt.Fprintln(a.Stderr, `TokenEyes estimates context and API cost without sending content anywhere.
 
 Usage:
-  tokeneyes estimate [paths/globs] --model MODEL [flags]
-  tokeneyes compare [paths/globs] --models MODEL,... [flags]
+  tokeneyes estimate [paths/globs] --model MODEL [--tui] [flags]
+  tokeneyes compare [paths/globs] --models MODEL,... [--tui] [flags]
   tokeneyes history [--limit N] [--json]
   tokeneyes diff RUN-A RUN-B [--json]
   tokeneyes models list|show [MODEL] [--json]
