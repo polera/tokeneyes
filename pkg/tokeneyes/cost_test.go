@@ -16,9 +16,9 @@ func TestCostUsesFixedPointCategories(t *testing.T) {
 
 func TestLongContextTier(t *testing.T) {
 	m, _ := DefaultCatalog().Resolve("gpt-5.4")
-	below := m.Price(272_000 - 1)
-	above := m.Price(272_000)
-	if below.InputMicrosPerMTok != 2_500_000 || above.InputMicrosPerMTok != 5_000_000 {
-		t.Fatalf("wrong tiers: below=%+v above=%+v", below, above)
+	boundary := m.Price(272_000)
+	above := m.Price(272_001)
+	if boundary.InputMicrosPerMTok != 2_500_000 || above.InputMicrosPerMTok != 5_000_000 {
+		t.Fatalf("wrong tiers: boundary=%+v above=%+v", boundary, above)
 	}
 }
