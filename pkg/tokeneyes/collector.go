@@ -12,8 +12,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -34,6 +36,31 @@ func NewFileCollector() *FileCollector { return &FileCollector{} }
 type ignoreRule struct {
 	re     *regexp.Regexp
 	negate bool
+}
+
+type collectionEvent struct {
+	candidate  *fileCandidate
+	warning    string
+	incomplete bool
+}
+
+type fileCandidate struct {
+	sequence   int
+	eventIndex int
+	abs        string
+	rel        string
+	size       int64
+}
+
+type preparedFile struct {
+	candidate  fileCandidate
+	content    []byte
+	sha        string
+	asset      Asset
+	extracted  []byte
+	media      bool
+	inspectErr error
+	readErr    error
 }
 
 func (FileCollector) Collect(ctx context.Context, req CollectRequest) (Collection, error) {
@@ -113,33 +140,68 @@ func (FileCollector) Collect(ctx context.Context, req CollectRequest) (Collectio
 		addBytes("stdin", "", "stdin", b)
 	}
 
+	events, err := discoverCollectionEvents(ctx, root, paths, req, rules, seen)
+	if err != nil {
+		return Collection{}, err
+	}
+	if err := collectEvents(ctx, events, req, &out); err != nil {
+		return Collection{}, err
+	}
+	if err := attachTranscripts(root, req, &out); err != nil {
+		return Collection{}, err
+	}
+
+	sort.Slice(out.Sources, func(i, j int) bool {
+		if out.Sources[i].Kind != out.Sources[j].Kind {
+			return out.Sources[i].Kind < out.Sources[j].Kind
+		}
+		return out.Sources[i].Label < out.Sources[j].Label
+	})
+	return out, nil
+}
+
+func discoverCollectionEvents(ctx context.Context, root string, paths []string, req CollectRequest, rules []ignoreRule, seen map[string]bool) ([]collectionEvent, error) {
+	var events []collectionEvent
+	addWarning := func(warning string, incomplete bool) {
+		events = append(events, collectionEvent{warning: warning, incomplete: incomplete})
+	}
+	addCandidate := func(abs string, info os.FileInfo) {
+		if seen[abs] {
+			return
+		}
+		seen[abs] = true
+		if !info.Mode().IsRegular() {
+			return
+		}
+		candidate := fileCandidate{eventIndex: len(events), abs: abs, rel: displayPath(root, abs), size: info.Size()}
+		events = append(events, collectionEvent{candidate: &candidate})
+	}
+
 	for _, p := range paths {
-		select {
-		case <-ctx.Done():
-			return Collection{}, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		abs, absErr := filepath.Abs(p)
 		if absErr != nil {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", p, absErr))
-			out.Incomplete = true
+			addWarning(fmt.Sprintf("skip %s: %v", p, absErr), true)
 			continue
 		}
 		info, statErr := os.Lstat(abs)
 		if statErr != nil {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", p, statErr))
-			out.Incomplete = true
+			addWarning(fmt.Sprintf("skip %s: %v", p, statErr), true)
 			continue
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			out.Warnings = append(out.Warnings, "skip symlink: "+displayPath(root, abs))
+			addWarning("skip symlink: "+displayPath(root, abs), false)
 			continue
 		}
 		if info.IsDir() {
 			walkErr := filepath.WalkDir(abs, func(candidate string, entry os.DirEntry, walkErr error) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if walkErr != nil {
-					out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", displayPath(root, candidate), walkErr))
-					out.Incomplete = true
+					addWarning(fmt.Sprintf("skip %s: %v", displayPath(root, candidate), walkErr), true)
 					return nil
 				}
 				rel := displayPath(root, candidate)
@@ -161,124 +223,255 @@ func (FileCollector) Collect(ctx context.Context, req CollectRequest) (Collectio
 				if ignored(rel, rules) {
 					return nil
 				}
-				collectFile(candidate, root, req, seen, &out, addBytes)
+				entryInfo, err := entry.Info()
+				if err != nil {
+					if !seen[candidate] {
+						seen[candidate] = true
+						addWarning(fmt.Sprintf("skip %s: %v", rel, err), true)
+					}
+					return nil
+				}
+				addCandidate(candidate, entryInfo)
 				return nil
 			})
 			if walkErr != nil {
-				out.Warnings = append(out.Warnings, walkErr.Error())
-				out.Incomplete = true
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				addWarning(walkErr.Error(), true)
 			}
 			continue
 		}
 		if ignored(displayPath(root, abs), rules) {
 			continue
 		}
-		collectFile(abs, root, req, seen, &out, addBytes)
+		addCandidate(abs, info)
 	}
-	if err := attachTranscripts(root, req, &out); err != nil {
-		return Collection{}, err
-	}
-
-	sort.Slice(out.Sources, func(i, j int) bool {
-		if out.Sources[i].Kind != out.Sources[j].Kind {
-			return out.Sources[i].Kind < out.Sources[j].Kind
-		}
-		return out.Sources[i].Label < out.Sources[j].Label
-	})
-	return out, nil
+	return events, nil
 }
 
-func collectFile(abs, root string, req CollectRequest, seen map[string]bool, out *Collection, add func(string, string, string, []byte)) {
-	if seen[abs] {
-		return
+func collectEvents(ctx context.Context, events []collectionEvent, req CollectRequest, out *Collection) error {
+	var candidates []fileCandidate
+	for _, event := range events {
+		if event.candidate != nil {
+			candidate := *event.candidate
+			candidate.sequence = len(candidates)
+			candidates = append(candidates, candidate)
+		}
 	}
-	seen[abs] = true
-	rel := displayPath(root, abs)
-	info, err := os.Lstat(abs)
-	if err != nil {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", rel, err))
+	eventIndex := 0
+	commit := func(result preparedFile) {
+		for eventIndex < result.candidate.eventIndex {
+			commitCollectionNotice(events[eventIndex], out)
+			eventIndex++
+		}
+		commitPreparedFile(result, req, out)
+		eventIndex++
+	}
+	if err := processCandidates(ctx, candidates, boundedWorkers(req.Workers), req, out, prepareFile, commit); err != nil {
+		return err
+	}
+	for eventIndex < len(events) {
+		commitCollectionNotice(events[eventIndex], out)
+		eventIndex++
+	}
+	return nil
+}
+
+func commitCollectionNotice(event collectionEvent, out *Collection) {
+	if event.warning != "" {
+		out.Warnings = append(out.Warnings, event.warning)
+	}
+	if event.incomplete {
 		out.Incomplete = true
-		return
 	}
-	if !info.Mode().IsRegular() {
-		return
+}
+
+func processCandidates(ctx context.Context, candidates []fileCandidate, workers int, req CollectRequest, out *Collection, prepare func(fileCandidate) preparedFile, commit func(preparedFile)) error {
+	if len(candidates) == 0 {
+		return ctx.Err()
 	}
+	if workers > len(candidates) {
+		workers = len(candidates)
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan fileCandidate, workers)
+	results := make(chan preparedFile, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				case candidate, ok := <-jobs:
+					if !ok {
+						return
+					}
+					result := prepare(candidate)
+					select {
+					case results <- result:
+					case <-workerCtx.Done():
+						return
+					}
+				}
+			}
+		}()
+	}
+	stop := func() {
+		cancel()
+		close(jobs)
+		wg.Wait()
+	}
+
 	readLimit := req.MaxFileBytes
 	if req.MaxMediaBytes > readLimit {
 		readLimit = req.MaxMediaBytes
 	}
-	if info.Size() > readLimit {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: file is %d bytes (limit %d)", rel, info.Size(), readLimit))
-		out.Incomplete = true
-		return
+	nextDispatch, nextCommit := 0, 0
+	pending := make(map[int]preparedFile, workers)
+	for nextCommit < len(candidates) {
+		for nextDispatch < len(candidates) && nextDispatch < nextCommit+workers {
+			candidate := candidates[nextDispatch]
+			if candidate.size > readLimit || out.TotalBytes+candidate.size > req.MaxTotalBytes {
+				pending[nextDispatch] = preparedFile{candidate: candidate}
+				nextDispatch++
+				continue
+			}
+			select {
+			case jobs <- candidate:
+				nextDispatch++
+			case <-ctx.Done():
+				stop()
+				return ctx.Err()
+			}
+		}
+		if result, ok := pending[nextCommit]; ok {
+			commit(result)
+			delete(pending, nextCommit)
+			nextCommit++
+			continue
+		}
+		select {
+		case result := <-results:
+			pending[result.candidate.sequence] = result
+		case <-ctx.Done():
+			stop()
+			return ctx.Err()
+		}
 	}
-	if out.TotalBytes+info.Size() > req.MaxTotalBytes {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: total input limit reached", rel))
-		out.Incomplete = true
-		return
-	}
-	// #nosec G304 -- abs is a collection target the caller asked to be counted.
-	b, err := os.ReadFile(abs)
+	close(jobs)
+	wg.Wait()
+	return nil
+}
+
+func prepareFile(candidate fileCandidate) preparedFile {
+	result := preparedFile{candidate: candidate}
+	// #nosec G304 -- candidate.abs is a collection target the caller asked to be counted.
+	b, err := os.ReadFile(candidate.abs)
 	if err != nil {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", rel, err))
+		result.readErr = err
+		return result
+	}
+	result.content = b
+	h := sha256.Sum256(b)
+	result.sha = hex.EncodeToString(h[:])
+	result.asset, result.extracted, result.media, result.inspectErr = inspectMedia(candidate.rel, candidate.rel, result.sha, b)
+	return result
+}
+
+func commitPreparedFile(result preparedFile, req CollectRequest, out *Collection) {
+	candidate := result.candidate
+	readLimit := req.MaxFileBytes
+	if req.MaxMediaBytes > readLimit {
+		readLimit = req.MaxMediaBytes
+	}
+	if candidate.size > readLimit {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: file is %d bytes (limit %d)", candidate.rel, candidate.size, readLimit))
 		out.Incomplete = true
 		return
 	}
-	h := sha256.Sum256(b)
-	sha := hex.EncodeToString(h[:])
-	asset, extracted, media, inspectErr := inspectMedia(rel, rel, sha, b)
-	if media {
-		if info.Size() > req.MaxMediaBytes {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: media is %d bytes (limit %d)", rel, info.Size(), req.MaxMediaBytes))
+	if out.TotalBytes+candidate.size > req.MaxTotalBytes {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: total input limit reached", candidate.rel))
+		out.Incomplete = true
+		return
+	}
+	if result.readErr != nil {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", candidate.rel, result.readErr))
+		out.Incomplete = true
+		return
+	}
+	if result.media {
+		if candidate.size > req.MaxMediaBytes {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: media is %d bytes (limit %d)", candidate.rel, candidate.size, req.MaxMediaBytes))
 			out.Incomplete = true
 			return
 		}
 		if len(out.Assets) >= req.MaxMediaCount {
-			out.Warnings = append(out.Warnings, "skip "+rel+": media count limit reached")
+			out.Warnings = append(out.Warnings, "skip "+candidate.rel+": media count limit reached")
 			out.Incomplete = true
 			return
 		}
-		if inspectErr != nil {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", rel, inspectErr))
+		if result.inspectErr != nil {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %v", candidate.rel, result.inspectErr))
 			out.Incomplete = true
 			return
 		}
-		if asset.Document != nil && asset.Document.Pages > req.MaxPages {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %d pages exceeds limit %d", rel, asset.Document.Pages, req.MaxPages))
+		if result.asset.Document != nil && result.asset.Document.Pages > req.MaxPages {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: %d pages exceeds limit %d", candidate.rel, result.asset.Document.Pages, req.MaxPages))
 			out.Incomplete = true
 			return
 		}
-		if asset.Audio != nil && time.Duration(asset.Audio.DurationMillis)*time.Millisecond > req.MaxDuration {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: duration exceeds %s", rel, req.MaxDuration))
+		if result.asset.Audio != nil && time.Duration(result.asset.Audio.DurationMillis)*time.Millisecond > req.MaxDuration {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: duration exceeds %s", candidate.rel, req.MaxDuration))
 			out.Incomplete = true
 			return
 		}
-		if extWarning := extensionMIMEWarning(rel, asset.DetectedMIME); extWarning != "" {
-			asset.Warnings = append(asset.Warnings, extWarning)
+		if extWarning := extensionMIMEWarning(candidate.rel, result.asset.DetectedMIME); extWarning != "" {
+			result.asset.Warnings = append(result.asset.Warnings, extWarning)
 			out.Warnings = append(out.Warnings, extWarning)
 		}
-		for _, warning := range asset.Warnings {
-			out.Warnings = append(out.Warnings, rel+": "+warning)
+		for _, warning := range result.asset.Warnings {
+			out.Warnings = append(out.Warnings, candidate.rel+": "+warning)
 		}
-		out.Assets = append(out.Assets, asset)
-		out.Sources = append(out.Sources, Source{Label: rel, Path: rel, Kind: asset.SourceKind, SHA256: sha, Bytes: info.Size(), AssetID: asset.ID, DetectedMIME: asset.DetectedMIME, Content: b, ExtractedText: normalizeText(extracted)})
-		out.TotalBytes += info.Size()
+		out.Assets = append(out.Assets, result.asset)
+		out.Sources = append(out.Sources, Source{Label: candidate.rel, Path: candidate.rel, Kind: result.asset.SourceKind, SHA256: result.sha, Bytes: candidate.size, AssetID: result.asset.ID, DetectedMIME: result.asset.DetectedMIME, Content: result.content, ExtractedText: normalizeText(result.extracted)})
+		out.TotalBytes += candidate.size
 		return
 	}
-	if info.Size() > req.MaxFileBytes {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: text file is %d bytes (limit %d)", rel, info.Size(), req.MaxFileBytes))
+	if candidate.size > req.MaxFileBytes {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("skip %s: text file is %d bytes (limit %d)", candidate.rel, candidate.size, req.MaxFileBytes))
 		out.Incomplete = true
 		return
 	}
-	if isBinary(b) {
-		out.Warnings = append(out.Warnings, "skip binary: "+rel)
+	if isBinary(result.content) {
+		out.Warnings = append(out.Warnings, "skip binary: "+candidate.rel)
 		return
 	}
-	if isGenerated(rel, b) {
-		out.Warnings = append(out.Warnings, "skip generated: "+rel)
+	if isGenerated(candidate.rel, result.content) {
+		out.Warnings = append(out.Warnings, "skip generated: "+candidate.rel)
 		return
 	}
-	add(rel, rel, "file", b)
+	b := normalizeText(result.content)
+	h := sha256.Sum256(b)
+	out.Sources = append(out.Sources, Source{Label: candidate.rel, Path: candidate.rel, Kind: "file", SHA256: hex.EncodeToString(h[:]), Bytes: int64(len(b)), Content: b})
+	out.TotalBytes += int64(len(b))
+}
+
+func boundedWorkers(workers int) int {
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	if workers > 8 {
+		workers = 8
+	}
+	if workers < 1 {
+		return 1
+	}
+	return workers
 }
 
 func extensionMIMEWarning(path, mime string) string {

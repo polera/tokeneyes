@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -65,13 +64,7 @@ func (e *Engine) Analyze(ctx context.Context, req AnalyzeRequest) (Run, error) {
 	if req.ReasoningTokens < 0 || req.CachedTokens < 0 {
 		return Run{}, fmt.Errorf("reasoning and cached tokens cannot be negative")
 	}
-	workers := req.Workers
-	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-	}
-	if workers > 8 {
-		workers = 8
-	}
+	workers := boundedWorkers(req.Workers)
 
 	models := make([]Model, len(req.Models))
 	for i, name := range req.Models {

@@ -88,6 +88,8 @@ The collector accepts text/code plus PNG, JPEG, WebP, GIF (first frame), WAV, MP
 
 Directory scans apply `.gitignore` and `.tokeneyesignore`, skip common dependency/build directories, generated files, and unrecognized binary formats, and do not follow symlinks. Ordering is deterministic. Unreadable files and exceeded limits mark a scan incomplete and produce warnings.
 
+File reads, hashing, and media inspection use a bounded worker pool. `--workers/-j` controls both collection workers and per-model comparison workers; results are committed in path order so limits and warnings remain deterministic.
+
 ## Configuration
 
 Put defaults in `.tokeneyes.yaml`; flags take precedence:

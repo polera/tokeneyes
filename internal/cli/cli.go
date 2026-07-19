@@ -141,7 +141,7 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 	fs.Int64Var(&o.reasoning, "reasoning-tokens", o.reasoning, "reasoning tokens per scenario")
 	fs.Int64Var(&o.cached, "cached-tokens", o.cached, "input tokens charged at cached rate")
 	fs.StringVar(&o.profile, "profile", o.profile, "overhead profile: none, chat, or codex")
-	fs.IntVarP(&o.workers, "workers", "j", o.workers, "bounded comparison workers")
+	fs.IntVarP(&o.workers, "workers", "j", o.workers, "bounded collection and comparison workers")
 	fs.Int64Var(&o.maxFile, "max-file-bytes", o.maxFile, "per-file byte limit")
 	fs.Int64Var(&o.maxTotal, "max-total-bytes", o.maxTotal, "total byte limit")
 	fs.Int64Var(&o.maxMedia, "max-media-size", o.maxMedia, "per-media byte limit")
@@ -290,7 +290,7 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 		}
 	}
 
-	collection, err := tokeneyes.NewFileCollector().Collect(ctx, tokeneyes.CollectRequest{Paths: paths, Prompt: o.prompt, PromptFile: o.promptFile, Preset: o.preset, Root: root, Stdin: a.Stdin, ReadStdin: o.readStdin, MaxFileBytes: o.maxFile, MaxTotalBytes: o.maxTotal, IncludeHidden: o.includeHidden, MaxMediaBytes: o.maxMedia, MaxMediaCount: o.maxMediaCount, MaxPages: o.maxPages, MaxDuration: o.maxDuration, Transcripts: o.transcripts})
+	collection, err := tokeneyes.NewFileCollector().Collect(ctx, tokeneyes.CollectRequest{Paths: paths, Prompt: o.prompt, PromptFile: o.promptFile, Preset: o.preset, Root: root, Stdin: a.Stdin, ReadStdin: o.readStdin, MaxFileBytes: o.maxFile, MaxTotalBytes: o.maxTotal, IncludeHidden: o.includeHidden, MaxMediaBytes: o.maxMedia, MaxMediaCount: o.maxMediaCount, MaxPages: o.maxPages, MaxDuration: o.maxDuration, Transcripts: o.transcripts, Workers: o.workers})
 	if err != nil {
 		a.error(err)
 		return ExitUsage

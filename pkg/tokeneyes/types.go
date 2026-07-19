@@ -46,6 +46,7 @@ type CollectRequest struct {
 	MaxPages      int
 	MaxDuration   time.Duration
 	Transcripts   []string
+	Workers       int
 }
 
 type Count struct {
