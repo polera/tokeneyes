@@ -5,3 +5,5 @@
 *.db-wal
 plan*
 .DS_Store
+tools/vhs/.demo/
+tools/vhs/.render.gif

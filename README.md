@@ -7,6 +7,18 @@ TokenEyes is an offline-first Go CLI for estimating mixed text, image, audio, an
 
 Repository content stays local unless `--verify` is explicitly supplied. Saved runs contain source labels/paths, SHA-256 hashes, byte counts, token results, and configuration, never source or prompt contents.
 
+## Terminal dashboard
+
+Add `--tui` to `estimate` or `compare` for a compact dashboard with per-model input tokens, context utilization, and expected API cost.
+
+![TokenEyes terminal dashboard comparing an input across OpenAI, Anthropic, and Google models](assets/tui-compare.png)
+
+The dashboard adapts to narrow terminals while preserving the same local estimate and privacy guarantees.
+
+![TokenEyes compact terminal dashboard in a narrow terminal](assets/tui-compact.png)
+
+_Screenshots use synthetic source data and are generated with [VHS](https://github.com/charmbracelet/vhs)._
+
 ## Install
 
 Tagged [GitHub releases](https://github.com/polera/tokeneyes/releases) include archives for Linux, macOS, and Windows on AMD64 and ARM64, plus a `checksums.txt` file containing SHA-256 checksums. Extract the archive for your platform and place `tokeneyes` (or `tokeneyes.exe` on Windows) on your `PATH`.
