@@ -1,12 +1,17 @@
 # TokenEyes
 
+[![Build binaries](https://github.com/polera/tokeneyes/actions/workflows/binaries.yml/badge.svg)](https://github.com/polera/tokeneyes/actions/workflows/binaries.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 TokenEyes is an offline-first Go CLI for estimating mixed text, image, audio, and document usage across OpenAI/Codex, Claude, and Gemini models. It reports per-modality formulas, bounded estimates, capability status, request planning, context fit, fixed-point API cost scenarios, and privacy-safe local history.
 
 Repository content stays local unless `--verify` is explicitly supplied. Saved runs contain source labels/paths, SHA-256 hashes, byte counts, token results, and configuration, never source or prompt contents.
 
 ## Install
 
-Requires Go 1.24 or newer.
+Tagged [GitHub releases](https://github.com/polera/tokeneyes/releases) include archives for Linux, macOS, and Windows on AMD64 and ARM64, plus a `checksums.txt` file containing SHA-256 checksums. Extract the archive for your platform and place `tokeneyes` (or `tokeneyes.exe` on Windows) on your `PATH`.
+
+To install with Go, use Go 1.26 or newer:
 
 ```sh
 go install github.com/polera/tokeneyes/cmd/tokeneyes@latest
@@ -107,6 +112,16 @@ Ordered override rules are applied to matching source paths; later matches repla
 
 The embedded catalog is an immutable release snapshot. `--catalog override.json` replaces matching model entries and adds new entries; `tokeneyes models show MODEL --json` prints the required JSON shape. Every result includes its catalog version and pricing date, and data older than 180 days or past an explicit pricing validity window is warned as stale. Costs represent public API list-price scenarios, not subscription usage or invoice reconciliation.
 
+The bundled `2026-07-19` catalog contains:
+
+| Provider | Models |
+| --- | --- |
+| OpenAI | `gpt-5.6`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano` |
+| Anthropic | `claude-fable-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| Google | `gemini-3.1-pro-preview`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+
+OpenAI long-context pricing starts above 272,000 input tokens for the applicable GPT-5.x models. Gemini Pro long-context pricing starts above 200,000 input tokens, and Gemini 2.5 Flash models apply their audio-specific input prices when estimating audio. Use `tokeneyes models list` and `tokeneyes models show MODEL` to inspect the catalog shipped with your installed version.
+
 ## Output and CI
 
 Human output is the default. `--json` emits `tokeneyes.run.v2`, preserving phase-one fields and adding privacy-safe `assets`, `request_plan`, `count_components`, `capability_status`, and verification transport metadata. SQLite migration 2 keeps old v1 payloads readable. Source bytes, extracted document text, transcripts, thumbnails, and upload identifiers are never persisted.
@@ -131,3 +146,7 @@ go vet ./...
 ```
 
 The reusable engine is in `pkg/tokeneyes`. Its collector, counter, verifier, and run store are behind interfaces, so applications can replace filesystem collection, tokenization, verification transport, or persistence independently of the CLI.
+
+## License
+
+TokenEyes is available under the [MIT License](LICENSE).
