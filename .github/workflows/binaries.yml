@@ -85,7 +85,7 @@ jobs:
             -trimpath \
             -ldflags "-s -w -X main.version=$version" \
             -o "dist/package/$binary" \
-            .
+            ./cmd/tokeneyes
 
       - name: Package binary
         env:
