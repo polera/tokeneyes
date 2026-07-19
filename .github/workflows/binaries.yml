@@ -1,0 +1,110 @@
+name: Build binaries
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Version reported by the compiled binary
+        required: false
+        type: string
+      retention-days:
+        description: Number of days to retain build artifacts
+        required: false
+        default: 7
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos:
+          - linux
+          - darwin
+          - windows
+        goarch:
+          - amd64
+          - arm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          version="$VERSION_INPUT"
+          if [ -z "$version" ]; then
+            version="dev-${GITHUB_SHA::7}"
+          fi
+
+          binary="tokeneyes"
+          if [ "$GOOS" = "windows" ]; then
+            binary="tokeneyes.exe"
+          fi
+
+          mkdir -p dist/package
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.version=$version" \
+            -o "dist/package/$binary" \
+            .
+
+      - name: Package binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          archive="tokeneyes_${GOOS}_${GOARCH}"
+          if [ "$GOOS" = "windows" ]; then
+            (cd dist/package && zip "../${archive}.zip" tokeneyes.exe)
+          else
+            tar -C dist/package -czf "dist/${archive}.tar.gz" tokeneyes
+          fi
+
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tokeneyes_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days || 7 }}
