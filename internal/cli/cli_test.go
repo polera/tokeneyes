@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/polera/tokeneyes/pkg/tokeneyes"
 )
 
 func testApp(t *testing.T, stdin string) (*App, *bytes.Buffer, *bytes.Buffer, string) {
@@ -124,5 +127,77 @@ func TestTUIAndJSONAreMutuallyExclusive(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--json and --tui cannot be used together") {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
+func TestHumanOutputSummarizesWarnings(t *testing.T) {
+	run := warningTestRun()
+
+	var standard bytes.Buffer
+	printRun(&standard, run, true)
+	assertWarningSummary(t, standard.String())
+
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("COLUMNS", "120")
+	var tui bytes.Buffer
+	printTUI(&tui, run, true)
+	assertWarningSummary(t, tui.String())
+}
+
+func TestHistoryRunShowsAllWarnings(t *testing.T) {
+	app, stdout, stderr, root := testApp(t, "")
+	db := filepath.Join(root, "history.db")
+	store, err := tokeneyes.OpenSQLite(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(context.Background(), warningTestRun()); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := app.Execute(context.Background(), []string{"history", "run-with-warnings", "--db", db})
+	if code != ExitOK {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	got := stdout.String()
+	for _, warning := range []string{"first warning detail", "second warning detail"} {
+		if !strings.Contains(got, warning) {
+			t.Errorf("history output missing %q:\n%s", warning, got)
+		}
+	}
+	if strings.Count(got, "first warning detail") != 1 {
+		t.Errorf("history output did not deduplicate warnings:\n%s", got)
+	}
+}
+
+func warningTestRun() tokeneyes.Run {
+	return tokeneyes.Run{
+		ID:             "run-with-warnings",
+		CreatedAt:      time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
+		CatalogVersion: "test-catalog",
+		Config:         tokeneyes.RunConfig{Models: []string{"test-model"}},
+		Warnings:       []string{"first warning detail"},
+		Results: []tokeneyes.ModelResult{{
+			Model:            "test-model",
+			CapabilityStatus: "supported",
+			Warnings:         []string{"first warning detail", "second warning detail"},
+		}},
+	}
+}
+
+func assertWarningSummary(t *testing.T, got string) {
+	t.Helper()
+	for _, want := range []string{"2 warnings", "tokeneyes history run-with-warnings"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+	for _, detail := range []string{"first warning detail", "second warning detail"} {
+		if strings.Contains(got, detail) {
+			t.Errorf("output included warning detail %q:\n%s", detail, got)
+		}
 	}
 }

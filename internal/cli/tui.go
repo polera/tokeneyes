@@ -6,7 +6,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/polera/tokeneyes/pkg/tokeneyes"
 )
@@ -55,7 +54,7 @@ func (r tuiRenderer) render(run tokeneyes.Run, saved bool) {
 		r.model(result, inner)
 	}
 
-	r.warnings(run)
+	r.warnings(run, saved)
 	r.rule("─")
 	footer := "✓ Estimated locally · source content not saved"
 	if run.Config.Verified {
@@ -123,16 +122,19 @@ func (r tuiRenderer) model(result tokeneyes.ModelResult, inner int) {
 	}
 }
 
-func (r tuiRenderer) warnings(run tokeneyes.Run) {
-	warnings := uniqueWarnings(run)
-	if len(warnings) == 0 {
+func (r tuiRenderer) warnings(run tokeneyes.Run, saved bool) {
+	count := len(uniqueWarnings(run))
+	if count == 0 {
 		return
 	}
-	// The zero-overhead note is repeated for every model and is useful, but it
-	// should occupy a single line in the compact view.
-	for _, warning := range warnings {
-		fmt.Fprintln(r.w, "  "+r.style(ansiWarn, "! ")+truncate(warning, r.width-6))
+	fmt.Fprintln(r.w, "  "+r.style(ansiWarn, "! ")+plural(count, "warning"))
+	if saved {
+		fmt.Fprintln(r.w, "  "+r.style(ansiDim, "View all warnings in the history view:"))
+		fmt.Fprintln(r.w, r.style(ansiDim, "tokeneyes history "+run.ID))
+		return
 	}
+	fmt.Fprintln(r.w, "  "+r.style(ansiDim, "Save the run to view all warnings"))
+	fmt.Fprintln(r.w, "  "+r.style(ansiDim, "in the history view."))
 }
 
 func (r tuiRenderer) line(left, right string) {
@@ -208,6 +210,18 @@ func uniqueWarnings(run tokeneyes.Run) []string {
 	return warnings
 }
 
+func warningNotice(run tokeneyes.Run, saved bool) string {
+	count := len(uniqueWarnings(run))
+	if count == 0 {
+		return ""
+	}
+	notice := plural(count, "warning")
+	if saved {
+		return notice + ". View all warnings in the history view: tokeneyes history " + run.ID
+	}
+	return notice + ". Save the run to view all warnings in the history view."
+}
+
 func visibleWidth(value string) int {
 	insideEscape := false
 	width := 0
@@ -222,17 +236,6 @@ func visibleWidth(value string) int {
 		}
 	}
 	return width
-}
-
-func truncate(value string, width int) string {
-	if utf8.RuneCountInString(value) <= width {
-		return value
-	}
-	if width <= 1 {
-		return "…"
-	}
-	runes := []rune(value)
-	return string(runes[:width-1]) + "…"
 }
 
 func plural(n int, noun string) string {

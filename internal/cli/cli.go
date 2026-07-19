@@ -396,6 +396,11 @@ func (a *App) history(ctx context.Context, args []string, cfg Config) int {
 	if err := fs.Parse(args); err != nil {
 		return ExitUsage
 	}
+	ids := fs.Args()
+	if len(ids) > 1 {
+		a.error(errors.New("history accepts at most one run ID"))
+		return ExitUsage
+	}
 	if err := os.MkdirAll(filepath.Dir(db), 0o700); err != nil {
 		a.error(err)
 		return ExitUsage
@@ -406,6 +411,19 @@ func (a *App) history(ctx context.Context, args []string, cfg Config) int {
 		return ExitUsage
 	}
 	defer store.Close()
+	if len(ids) == 1 {
+		run, getErr := store.Get(ctx, ids[0])
+		if getErr != nil {
+			a.error(getErr)
+			return ExitUsage
+		}
+		if jsonOut {
+			_ = writeJSON(a.Stdout, run)
+		} else {
+			printHistoryRun(a.Stdout, run)
+		}
+		return ExitOK
+	}
 	runs, err := store.List(ctx, limit)
 	if err != nil {
 		a.error(err)
@@ -519,6 +537,14 @@ func (a *App) models(args []string, cfg Config) int {
 }
 
 func printRun(w io.Writer, run tokeneyes.Run, saved bool) {
+	printRunDetails(w, run, saved, false)
+}
+
+func printHistoryRun(w io.Writer, run tokeneyes.Run) {
+	printRunDetails(w, run, false, true)
+}
+
+func printRunDetails(w io.Writer, run tokeneyes.Run, saved, showWarnings bool) {
 	fmt.Fprintf(w, "Run %s (%s)\n", run.ID, run.CatalogVersion)
 	fmt.Fprintf(w, "%d sources, %d bytes", len(run.Sources), totalBytes(run.Sources))
 	if run.Incomplete {
@@ -575,12 +601,15 @@ func printRun(w io.Writer, run tokeneyes.Run, saved bool) {
 		if result.Verification.Method != "" {
 			fmt.Fprintf(w, "  Official verification: %d tokens via %s (%s)\n", result.Verification.Tokens, result.Verification.Method, result.Verification.Transport)
 		}
-		for _, warning := range result.Warnings {
-			fmt.Fprintln(w, "  warning: "+warning)
-		}
 	}
-	for _, warning := range run.Warnings {
-		fmt.Fprintln(w, "warning: "+warning)
+	warnings := uniqueWarnings(run)
+	if showWarnings && len(warnings) > 0 {
+		fmt.Fprintf(w, "\nWarnings (%d):\n", len(warnings))
+		for _, warning := range warnings {
+			fmt.Fprintln(w, "  - "+warning)
+		}
+	} else if notice := warningNotice(run, saved); notice != "" {
+		fmt.Fprintln(w, "\n"+notice)
 	}
 	if saved {
 		fmt.Fprintln(w, "\nSaved to local history; source contents were not retained.")
@@ -604,7 +633,7 @@ func (a *App) usage() {
 Usage:
   tokeneyes estimate [paths/globs] --model MODEL [--tui] [flags]
   tokeneyes compare [paths/globs] --models MODEL,... [--tui] [flags]
-  tokeneyes history [--limit N] [--json]
+  tokeneyes history [RUN-ID] [--limit N] [--json]
   tokeneyes diff RUN-A RUN-B [--json]
   tokeneyes models list|show [MODEL] [--json]
 

@@ -46,6 +46,7 @@ GEMINI_API_KEY=... tokeneyes estimate plan.md --model gemini --verify
 
 # Inspect and compare privacy-safe saved runs.
 tokeneyes history
+tokeneyes history 20260716T120000Z-a1b2c3d4
 tokeneyes diff 20260716T120000Z-a1b2c3d4 20260716T130000Z-e5f6a7b8
 tokeneyes models list
 tokeneyes models show gpt-5.5
