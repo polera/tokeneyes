@@ -64,5 +64,5 @@ jobs:
             gh release create "$TAG" dist/* \
               --verify-tag \
               --generate-notes \
-              --title "Tokeneyes $TAG"
+              --title "tokeneyes $TAG"
           fi
