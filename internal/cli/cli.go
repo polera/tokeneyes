@@ -29,18 +29,44 @@ const (
 )
 
 type App struct {
-	Stdout io.Writer
-	Stderr io.Writer
-	Stdin  io.Reader
-	Getwd  func() (string, error)
+	Stdout      io.Writer
+	Stderr      io.Writer
+	Stdin       io.Reader
+	Getwd       func() (string, error)
+	Version     string
+	Updater     UpgradeManager
+	Interactive func() bool
 }
 
-func New() *App { return &App{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin, Getwd: os.Getwd} }
+func New(version string) *App {
+	if version == "" {
+		version = "dev"
+	}
+	return &App{
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
+		Stdin:       os.Stdin,
+		Getwd:       os.Getwd,
+		Version:     version,
+		Updater:     NewGitHubUpdater(),
+		Interactive: func() bool { return isTerminal(os.Stdin) && isTerminal(os.Stderr) },
+	}
+}
 
 func (a *App) Execute(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		a.usage()
 		return ExitUsage
+	}
+	switch args[0] {
+	case "help", "--help", "-h":
+		a.usage()
+		return ExitOK
+	case "version", "--version":
+		fmt.Fprintf(a.Stdout, "tokeneyes %s catalog=%s\n", a.installedVersion(), tokeneyes.CatalogVersion)
+		return ExitOK
+	case "upgrade":
+		return a.upgrade(ctx, args[1:])
 	}
 	configPath, explicit := findConfigArg(args)
 	cfg, err := loadConfig(configPath, explicit)
@@ -48,28 +74,27 @@ func (a *App) Execute(ctx context.Context, args []string) int {
 		a.error(err)
 		return ExitUsage
 	}
+	var code int
 	switch args[0] {
 	case "estimate":
-		return a.runAnalysis(ctx, "estimate", args[1:], cfg)
+		code = a.runAnalysis(ctx, "estimate", args[1:], cfg)
 	case "compare":
-		return a.runAnalysis(ctx, "compare", args[1:], cfg)
+		code = a.runAnalysis(ctx, "compare", args[1:], cfg)
 	case "history":
-		return a.history(ctx, args[1:], cfg)
+		code = a.history(ctx, args[1:], cfg)
 	case "diff":
-		return a.diff(ctx, args[1:], cfg)
+		code = a.diff(ctx, args[1:], cfg)
 	case "models":
-		return a.models(args[1:], cfg)
-	case "help", "--help", "-h":
-		a.usage()
-		return ExitOK
-	case "version", "--version":
-		fmt.Fprintln(a.Stdout, "tokeneyes dev catalog="+tokeneyes.CatalogVersion)
-		return ExitOK
+		code = a.models(args[1:], cfg)
 	default:
 		a.error(fmt.Errorf("unknown command %q", args[0]))
 		a.usage()
 		return ExitUsage
 	}
+	if code == ExitOK {
+		a.offerUpgrade(ctx)
+	}
+	return code
 }
 
 type analysisOptions struct {
@@ -636,6 +661,7 @@ Usage:
   tokeneyes history [RUN-ID] [--limit N] [--json]
   tokeneyes diff RUN-A RUN-B [--json]
   tokeneyes models list|show [MODEL] [--json]
+  tokeneyes upgrade
 
 Use --verify to explicitly send assembled input to Anthropic or Gemini token-counting endpoints.`)
 }

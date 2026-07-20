@@ -23,6 +23,16 @@ _Screenshots use synthetic source data and are generated with [VHS](https://gith
 
 Tagged [GitHub releases](https://github.com/polera/tokeneyes/releases) include archives for Linux, macOS, and Windows on AMD64 and ARM64, plus a `checksums.txt` file containing SHA-256 checksums. Extract the archive for your platform and place `tokeneyes` (or `tokeneyes.exe` on Windows) on your `PATH`.
 
+Release builds check GitHub for a newer release at most once every 24 hours after an interactive command. When one is available, TokenEyes offers to install it or defer the reminder for 24 hours. The check sends no repository or prompt content and can be disabled with `TOKENEYES_NO_UPDATE_CHECK=1`.
+
+To check and upgrade immediately:
+
+```sh
+tokeneyes upgrade
+```
+
+The updater downloads the archive for the current OS and architecture, verifies its SHA-256 digest against the release's `checksums.txt`, and replaces the current executable. Development builds do not check automatically, but `tokeneyes upgrade` installs the latest release explicitly.
+
 To install with Go, use Go 1.26 or newer:
 
 ```sh
