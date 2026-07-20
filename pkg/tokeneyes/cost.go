@@ -45,6 +45,12 @@ func ScenarioCostBreakdown(model Model, input, cached, output, reasoning int64) 
 // input categories exactly equal the sum recorded on the components plus the
 // separately supplied request overhead.
 func PriceComponents(model Model, components []CountComponent, overhead, cached, total int64) ([]CountComponent, int64, int64) {
+	return PriceComponentsBound(model, components, overhead, cached, total, "expected")
+}
+
+// PriceComponentsBound prices text and media components using the same risk
+// bound that selected the aggregate pricing tier.
+func PriceComponentsBound(model Model, components []CountComponent, overhead, cached, total int64, bound string) ([]CountComponent, int64, int64) {
 	out := append([]CountComponent(nil), components...)
 	remaining := cached
 	var regular, cachedCost int64
@@ -53,6 +59,9 @@ func PriceComponents(model Model, components []CountComponent, overhead, cached,
 			continue
 		}
 		n := out[i].Expected
+		if bound == "high" {
+			n = out[i].High
+		}
 		cachedN := min64(remaining, n)
 		remaining -= cachedN
 		tier := model.PriceForModality(out[i].Modality, total)

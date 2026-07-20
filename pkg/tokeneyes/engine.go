@@ -38,6 +38,9 @@ func (e *Engine) Analyze(ctx context.Context, req AnalyzeRequest) (Run, error) {
 	if req.DocumentDetail == "" {
 		req.DocumentDetail = "auto"
 	}
+	if req.EstimateBound == "" {
+		req.EstimateBound = "expected"
+	}
 	if req.Processing != "native" && req.Processing != "normalized-text" {
 		return Run{}, fmt.Errorf("unknown processing mode %q", req.Processing)
 	}
@@ -46,6 +49,9 @@ func (e *Engine) Analyze(ctx context.Context, req AnalyzeRequest) (Run, error) {
 	}
 	if !containsString([]string{"auto", "text", "low", "high"}, req.DocumentDetail) {
 		return Run{}, fmt.Errorf("unknown document detail %q", req.DocumentDetail)
+	}
+	if !containsString([]string{"expected", "high"}, req.EstimateBound) {
+		return Run{}, fmt.Errorf("unknown estimate bound %q", req.EstimateBound)
 	}
 	if req.AllowFileUpload && !req.Verify {
 		return Run{}, fmt.Errorf("file upload authorization requires verification")
@@ -104,7 +110,7 @@ func (e *Engine) Analyze(ctx context.Context, req AnalyzeRequest) (Run, error) {
 
 	now := e.Now().UTC()
 	run := Run{SchemaVersion: SchemaVersion, ID: newRunID(now), CreatedAt: now, CatalogVersion: e.Catalog.Version, Results: results, Warnings: append([]string(nil), req.Collection.Warnings...), Incomplete: req.Collection.Incomplete}
-	run.Config = RunConfig{Models: modelIDs(models), OutputTokens: append([]int64(nil), req.OutputTokens...), ReasoningTokens: req.ReasoningTokens, CachedTokens: req.CachedTokens, Preset: req.Preset, Verified: req.Verify, Processing: req.Processing, ImageDetail: req.ImageDetail, DocumentDetail: req.DocumentDetail, AllowFileUpload: req.AllowFileUpload}
+	run.Config = RunConfig{Models: modelIDs(models), OutputTokens: append([]int64(nil), req.OutputTokens...), ReasoningTokens: req.ReasoningTokens, CachedTokens: req.CachedTokens, Preset: req.Preset, Verified: req.Verify, Processing: req.Processing, ImageDetail: req.ImageDetail, DocumentDetail: req.DocumentDetail, AllowFileUpload: req.AllowFileUpload, EstimateBound: req.EstimateBound}
 	run.Sources = privacySources(req.Collection.Sources)
 	run.Assets = append([]Asset(nil), req.Collection.Assets...)
 	for _, result := range results {
@@ -144,14 +150,25 @@ func (e *Engine) analyzeModel(ctx context.Context, model Model, rawContent, asse
 	if wrapperTokens < 0 {
 		wrapperTokens = 0
 	}
+	wrapperLow := shaped.Low - input.High
+	if wrapperLow < 0 {
+		wrapperLow = 0
+	}
+	wrapperHigh := shaped.High - input.Low
+	if wrapperHigh < 0 {
+		wrapperHigh = 0
+	}
 	overhead := Overhead{SystemTokens: system.Tokens, ToolTokens: tools.Tokens, WrapperTokens: wrapperTokens}
+	exactProfileOverhead := int64(0)
 	switch req.Profile {
 	case "", "none":
 	case "chat":
 		overhead.WrapperTokens += 7
+		exactProfileOverhead += 7
 	case "codex":
 		overhead.WrapperTokens += 12
 		overhead.RuntimeTokens = 1_200
+		exactProfileOverhead += 1_212
 	default:
 		return ModelResult{}, fmt.Errorf("unknown overhead profile %q", req.Profile)
 	}
@@ -178,44 +195,32 @@ func (e *Engine) analyzeModel(ctx context.Context, model Model, rawContent, asse
 		componentTotal, componentLow, componentHigh = input.Tokens, input.Low, input.High
 	}
 	total := componentTotal + overhead.Total()
-	low, high := componentLow+overhead.Total(), componentHigh+overhead.Total()
+	overheadLow := system.Low + tools.Low + wrapperLow + exactProfileOverhead
+	overheadHigh := system.High + tools.High + wrapperHigh + exactProfileOverhead
+	low, high := componentLow+overheadLow, componentHigh+overheadHigh
 	sources := planned.Sources
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Count.Tokens > sources[j].Count.Tokens })
 	confidence := input.Confidence
-	for _, c := range planned.Components {
-		if c.Confidence > 0 && c.Confidence < confidence {
-			confidence = c.Confidence
+	if hasMedia {
+		confidence = 0
+		set := false
+		for _, c := range planned.Components {
+			if c.Unit == "tokens" && (!set || c.Confidence < confidence) {
+				confidence = c.Confidence
+				set = true
+			}
 		}
 	}
-	r := ModelResult{Model: model.ID, Provider: model.Provider, InputTokens: total, InputLow: low, InputHigh: high, CachedInputTokens: min64(req.CachedTokens, total), Overhead: overhead, ContextWindow: model.ContextWindow, ContextUtilization: float64(total) / float64(model.ContextWindow), CounterMethod: "modality component aggregate", Confidence: confidence, Sources: sources, RequestPlan: planned.Plan, CountComponents: planned.Components, CapabilityStatus: planned.Status, PricingDate: model.PricingDate, Warnings: append([]string(nil), planned.Warnings...)}
-	componentRegular, componentCached := int64(0), int64(0)
-	if hasMedia {
-		r.CountComponents, componentRegular, componentCached = PriceComponents(model, r.CountComponents, overhead.Total(), r.CachedInputTokens, total)
+	decisionTotal := total
+	if req.EstimateBound == "high" {
+		decisionTotal = high
 	}
+	r := ModelResult{Model: model.ID, Provider: model.Provider, InputTokens: total, InputLow: low, InputHigh: high, EstimateBound: req.EstimateBound, DecisionInputTokens: decisionTotal, CachedInputTokens: min64(req.CachedTokens, total), Overhead: overhead, ContextWindow: model.ContextWindow, ContextUtilization: float64(total) / float64(model.ContextWindow), CounterMethod: "modality component aggregate", FormulaVersion: input.FormulaVersion, Confidence: confidence, Sources: sources, RequestPlan: planned.Plan, CountComponents: planned.Components, CapabilityStatus: planned.Status, PricingDate: model.PricingDate, Warnings: append([]string(nil), planned.Warnings...)}
 	if req.Profile == "" || req.Profile == "none" {
 		r.Warnings = append(r.Warnings, "system, tool, and agent-runtime overhead default to zero unless explicitly supplied")
 	}
 	if model.PricingStale(e.Now()) {
 		r.Warnings = append(r.Warnings, "catalog pricing is stale or past its validity window")
-	}
-	if total > model.ContextWindow {
-		r.Warnings = append(r.Warnings, fmt.Sprintf("input exceeds context window by %d tokens", total-model.ContextWindow))
-	}
-	for i, output := range req.OutputTokens {
-		name := scenarioName(i, len(req.OutputTokens))
-		breakdown := ScenarioCostBreakdown(model, total, r.CachedInputTokens, output, req.ReasoningTokens)
-		if hasMedia {
-			tier := model.Price(total)
-			breakdown.InputMicrosUSD = componentRegular
-			breakdown.CachedInputMicrosUSD = componentCached
-			breakdown.OutputMicrosUSD = CostMicros(tier.OutputMicrosPerMTok, output)
-			breakdown.ReasoningMicrosUSD = CostMicros(tier.OutputMicrosPerMTok, req.ReasoningTokens)
-		}
-		cost := breakdown.Total()
-		r.Scenarios = append(r.Scenarios, OutputScenario{Name: name, OutputTokens: output, ReasoningTokens: req.ReasoningTokens, CostBreakdown: breakdown, CostMicrosUSD: cost, CostUSD: FormatUSD(cost)})
-		if output+req.ReasoningTokens > model.MaxOutput {
-			r.Warnings = append(r.Warnings, fmt.Sprintf("%s scenario exceeds max output by %d tokens", name, output+req.ReasoningTokens-model.MaxOutput))
-		}
 	}
 	r.Verification.Requested = req.Verify
 	if req.Verify {
@@ -227,27 +232,66 @@ func (e *Engine) analyzeModel(ctx context.Context, model Model, rawContent, asse
 			if req.RequireVerify {
 				return ModelResult{}, verifyErr
 			}
-			return r, nil
-		}
-		if e.Verifier == nil {
+		} else if e.Verifier == nil {
 			return ModelResult{}, fmt.Errorf("verification requested but no verifier is configured")
-		}
-		verified, verifyErr := e.Verifier.Verify(ctx, model, AssembledRequest{System: req.System, Tools: req.Tools, Content: assembled, Parts: planned.Parts, AllowFileUpload: req.AllowFileUpload})
-		r.Verification.Tokens, r.Verification.Method = verified.Tokens, verified.Method
-		r.Verification.Transport, r.Verification.CleanupStatus = verified.Transport, verified.CleanupStatus
-		if verifyErr != nil {
-			r.Verification.Error = verifyErr.Error()
-			r.Warnings = append(r.Warnings, "verification failed: "+verifyErr.Error())
-			if req.RequireVerify {
-				return ModelResult{}, verifyErr
-			}
 		} else {
-			if verified.Tokens != total {
-				r.Warnings = append(r.Warnings, fmt.Sprintf("official aggregate differs from local estimate by %+d tokens", verified.Tokens-total))
+			verified, verifyErr := e.Verifier.Verify(ctx, model, AssembledRequest{System: req.System, Tools: req.Tools, Content: assembled, Parts: planned.Parts, AllowFileUpload: req.AllowFileUpload})
+			r.Verification.Tokens, r.Verification.Method = verified.Tokens, verified.Method
+			r.Verification.Transport, r.Verification.CleanupStatus = verified.Transport, verified.CleanupStatus
+			if verifyErr != nil {
+				r.Verification.Error = verifyErr.Error()
+				r.Warnings = append(r.Warnings, "verification failed: "+verifyErr.Error())
+				if req.RequireVerify {
+					return ModelResult{}, verifyErr
+				}
+			} else {
+				r.DecisionInputTokens = verified.Tokens
+				if verified.Tokens != total {
+					r.Warnings = append(r.Warnings, fmt.Sprintf("official aggregate differs from local estimate by %+d tokens", verified.Tokens-total))
+				}
 			}
 		}
 	}
+	if r.DecisionInputTokens > model.ContextWindow {
+		r.Warnings = append(r.Warnings, fmt.Sprintf("%s input exceeds context window by %d tokens", decisionMethod(r), r.DecisionInputTokens-model.ContextWindow))
+	}
+	r.CachedInputTokens = min64(req.CachedTokens, r.DecisionInputTokens)
+	componentRegular, componentCached := int64(0), int64(0)
+	if hasMedia && !verifiedDecision(r) {
+		pricingOverhead := overhead.Total()
+		if req.EstimateBound == "high" {
+			pricingOverhead = overheadHigh
+		}
+		r.CountComponents, componentRegular, componentCached = PriceComponentsBound(model, r.CountComponents, pricingOverhead, r.CachedInputTokens, r.DecisionInputTokens, req.EstimateBound)
+	}
+	for i, output := range req.OutputTokens {
+		name := scenarioName(i, len(req.OutputTokens))
+		breakdown := ScenarioCostBreakdown(model, r.DecisionInputTokens, r.CachedInputTokens, output, req.ReasoningTokens)
+		if hasMedia && !verifiedDecision(r) {
+			tier := model.Price(r.DecisionInputTokens)
+			breakdown.InputMicrosUSD = componentRegular
+			breakdown.CachedInputMicrosUSD = componentCached
+			breakdown.OutputMicrosUSD = CostMicros(tier.OutputMicrosPerMTok, output)
+			breakdown.ReasoningMicrosUSD = CostMicros(tier.OutputMicrosPerMTok, req.ReasoningTokens)
+		}
+		cost := breakdown.Total()
+		r.Scenarios = append(r.Scenarios, OutputScenario{Name: name, OutputTokens: output, ReasoningTokens: req.ReasoningTokens, CostBreakdown: breakdown, CostMicrosUSD: cost, CostUSD: FormatUSD(cost)})
+		if output+req.ReasoningTokens > model.MaxOutput {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("%s scenario exceeds max output by %d tokens", name, output+req.ReasoningTokens-model.MaxOutput))
+		}
+	}
 	return r, nil
+}
+
+func decisionMethod(r ModelResult) string {
+	if verifiedDecision(r) {
+		return "officially verified"
+	}
+	return r.EstimateBound + "-bound"
+}
+
+func verifiedDecision(r ModelResult) bool {
+	return r.Verification.Method != "" && r.Verification.Error == ""
 }
 
 func assemble(sources []Source) string {

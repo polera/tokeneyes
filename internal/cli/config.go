@@ -36,6 +36,7 @@ type Config struct {
 	FailOverflow    bool             `yaml:"fail_overflow"`
 	MaxInputTokens  int64            `yaml:"max_input_tokens"`
 	MaxCostUSD      string           `yaml:"max_cost_usd"`
+	EstimateBound   string           `yaml:"estimate_bound"`
 	IncludeHidden   bool             `yaml:"include_hidden"`
 }
 

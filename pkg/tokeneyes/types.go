@@ -50,11 +50,12 @@ type CollectRequest struct {
 }
 
 type Count struct {
-	Tokens     int64   `json:"tokens"`
-	Low        int64   `json:"low"`
-	High       int64   `json:"high"`
-	Method     string  `json:"method"`
-	Confidence float64 `json:"confidence"`
+	Tokens         int64   `json:"tokens"`
+	Low            int64   `json:"low"`
+	High           int64   `json:"high"`
+	Method         string  `json:"method"`
+	FormulaVersion string  `json:"formula_version,omitempty"`
+	Confidence     float64 `json:"confidence"`
 }
 
 type SourceResult struct {
@@ -108,25 +109,28 @@ type Verification struct {
 }
 
 type ModelResult struct {
-	Model              string           `json:"model"`
-	Provider           string           `json:"provider"`
-	InputTokens        int64            `json:"input_tokens"`
-	InputLow           int64            `json:"input_low"`
-	InputHigh          int64            `json:"input_high"`
-	CachedInputTokens  int64            `json:"cached_input_tokens"`
-	Overhead           Overhead         `json:"overhead"`
-	ContextWindow      int64            `json:"context_window"`
-	ContextUtilization float64          `json:"context_utilization"`
-	CounterMethod      string           `json:"counter_method"`
-	Confidence         float64          `json:"confidence"`
-	Sources            []SourceResult   `json:"sources"`
-	RequestPlan        []PlannedPart    `json:"request_plan,omitempty"`
-	CountComponents    []CountComponent `json:"count_components,omitempty"`
-	CapabilityStatus   string           `json:"capability_status"`
-	Scenarios          []OutputScenario `json:"scenarios"`
-	Verification       Verification     `json:"verification"`
-	PricingDate        string           `json:"pricing_date"`
-	Warnings           []string         `json:"warnings,omitempty"`
+	Model               string           `json:"model"`
+	Provider            string           `json:"provider"`
+	InputTokens         int64            `json:"input_tokens"`
+	InputLow            int64            `json:"input_low"`
+	InputHigh           int64            `json:"input_high"`
+	EstimateBound       string           `json:"estimate_bound"`
+	DecisionInputTokens int64            `json:"decision_input_tokens"`
+	CachedInputTokens   int64            `json:"cached_input_tokens"`
+	Overhead            Overhead         `json:"overhead"`
+	ContextWindow       int64            `json:"context_window"`
+	ContextUtilization  float64          `json:"context_utilization"`
+	CounterMethod       string           `json:"counter_method"`
+	FormulaVersion      string           `json:"formula_version,omitempty"`
+	Confidence          float64          `json:"confidence"`
+	Sources             []SourceResult   `json:"sources"`
+	RequestPlan         []PlannedPart    `json:"request_plan,omitempty"`
+	CountComponents     []CountComponent `json:"count_components,omitempty"`
+	CapabilityStatus    string           `json:"capability_status"`
+	Scenarios           []OutputScenario `json:"scenarios"`
+	Verification        Verification     `json:"verification"`
+	PricingDate         string           `json:"pricing_date"`
+	Warnings            []string         `json:"warnings,omitempty"`
 }
 
 type Run struct {
@@ -153,6 +157,7 @@ type RunConfig struct {
 	ImageDetail     string   `json:"image_detail,omitempty"`
 	DocumentDetail  string   `json:"document_detail,omitempty"`
 	AllowFileUpload bool     `json:"allow_file_upload,omitempty"`
+	EstimateBound   string   `json:"estimate_bound,omitempty"`
 }
 
 type AnalyzeRequest struct {
@@ -172,6 +177,7 @@ type AnalyzeRequest struct {
 	ImageDetail     string
 	DocumentDetail  string
 	AllowFileUpload bool
+	EstimateBound   string
 	Overrides       []ProcessingOverride
 }
 

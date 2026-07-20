@@ -62,6 +62,10 @@ printf 'Explain this patch' | tokeneyes estimate --stdin --preset changed --json
 tokeneyes compare . --system-file system.txt --tools-file tools.json \
   --profile codex --output-tokens 1000,4000,16000 --reasoning-tokens 8000
 
+# Use conservative empirical/heuristic upper bounds for CI decisions and cost.
+tokeneyes estimate . --model claude --estimate-bound high \
+  --fail-overflow --max-input-tokens 900000
+
 # Explicitly send the assembled request to official counting endpoints.
 ANTHROPIC_API_KEY=... tokeneyes estimate plan.md --model claude --verify
 GEMINI_API_KEY=... tokeneyes estimate plan.md --model gemini --verify
@@ -131,6 +135,7 @@ fail_incomplete: false
 fail_overflow: false
 max_input_tokens: 0
 max_cost_usd: ""
+estimate_bound: expected
 ```
 
 Ordered override rules are applied to matching source paths; later matches replace fields set by earlier matches. Use `--config path/to/config.yaml` to select another file. Credentials are read only from `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` and are not stored. File upload permission is intentionally CLI-only: `--allow-file-upload` requires `--verify` and cannot be inherited from repository configuration.
@@ -153,7 +158,12 @@ Human output is the default. Add `--tui` to `estimate` or `compare` for a compac
 
 `--json` emits `tokeneyes.run.v2`, preserving phase-one fields and adding privacy-safe `assets`, `request_plan`, `count_components`, `capability_status`, and verification transport metadata. SQLite migration 2 keeps old v1 payloads readable. Source bytes, extracted document text, transcripts, thumbnails, and upload identifiers are never persisted.
 
-Threshold flags have stable exit codes:
+Threshold flags have stable exit codes. `--estimate-bound expected|high`
+selects the token count used consistently for context overflow, input budgets,
+pricing tiers, and cost budgets. `expected` is the compatibility default;
+`high` is recommended for CI when a provider uses a bounded local estimate.
+Exact local tokenizers have identical bounds, and successful `--verify` results
+are authoritative for decisions without replacing the recorded local estimate.
 
 | Code | Meaning |
 | ---: | --- |
@@ -173,6 +183,23 @@ go vet ./...
 ```
 
 The reusable engine is in `pkg/tokeneyes`. Its collector, counter, verifier, and run store are behind interfaces, so applications can replace filesystem collection, tokenization, verification transport, or persistence independently of the CLI.
+
+Claude's bundled counters are explicitly labeled heuristics, not calibrated or
+official counts. The shared versioned feature extractor and opt-in calibration
+workflow live under [`tools/anthropic-calibration`](tools/anthropic-calibration/README.md).
+Candidate artifacts cannot be used by production until recorded blind-test
+evidence passes the gates in `plan_anthropic_tokenizer.md`.
+
+## Acknowledgements and sources
+
+The Anthropic calibration methodology was informed by
+[“Counting Claude Tokens Without a Tokenizer”](https://blog.gopenai.com/counting-claude-tokens-without-a-tokenizer-e767f2b6e632)
+and the accompanying
+[`petasbytes/token-approx` experiments](https://github.com/petasbytes/token-approx).
+TokenEyes does not copy their fitted coefficients; its workflow requires fresh,
+family-specific labels across TokenEyes' broader corpus. Endpoint behavior and
+request construction follow Anthropic's official
+[`count_tokens` documentation](https://platform.claude.com/docs/en/api/messages/count_tokens).
 
 ## License
 

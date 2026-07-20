@@ -99,7 +99,7 @@ func (a *App) Execute(ctx context.Context, args []string) int {
 
 type analysisOptions struct {
 	model, models, prompt, promptFile, preset, system, systemFile, tools, toolsFile                                      string
-	outputTokens, profile, catalogPath, dbPath, maxCost                                                                  string
+	outputTokens, profile, catalogPath, dbPath, maxCost, estimateBound                                                   string
 	processing, imageDetail, documentDetail                                                                              string
 	reasoning, cached, maxFile, maxTotal, maxMedia, maxInput                                                             int64
 	maxDuration                                                                                                          time.Duration
@@ -136,7 +136,10 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 	}
 
 	maxDuration, _ := time.ParseDuration(cfg.MaxDuration)
-	o := analysisOptions{model: modelDefault, models: modelsDefault, outputTokens: outputsDefault, reasoning: cfg.ReasoningTokens, cached: cfg.CachedTokens, maxFile: cfg.MaxFileBytes, maxTotal: cfg.MaxTotalBytes, maxMedia: cfg.MaxMediaBytes, maxMediaCount: cfg.MaxMediaCount, maxPages: cfg.MaxPages, maxDuration: maxDuration, processing: cfg.Processing, imageDetail: cfg.ImageDetail, documentDetail: cfg.DocumentDetail, transcripts: append([]string(nil), cfg.Transcripts...), workers: cfg.Workers, profile: profileDefault, catalogPath: cfg.Catalog, dbPath: dbDefault, noSave: cfg.NoSave, failIncomplete: cfg.FailIncomplete, failOverflow: cfg.FailOverflow, maxInput: cfg.MaxInputTokens, maxCost: cfg.MaxCostUSD, includeHidden: cfg.IncludeHidden}
+	o := analysisOptions{model: modelDefault, models: modelsDefault, outputTokens: outputsDefault, reasoning: cfg.ReasoningTokens, cached: cfg.CachedTokens, maxFile: cfg.MaxFileBytes, maxTotal: cfg.MaxTotalBytes, maxMedia: cfg.MaxMediaBytes, maxMediaCount: cfg.MaxMediaCount, maxPages: cfg.MaxPages, maxDuration: maxDuration, processing: cfg.Processing, imageDetail: cfg.ImageDetail, documentDetail: cfg.DocumentDetail, transcripts: append([]string(nil), cfg.Transcripts...), workers: cfg.Workers, profile: profileDefault, catalogPath: cfg.Catalog, dbPath: dbDefault, noSave: cfg.NoSave, failIncomplete: cfg.FailIncomplete, failOverflow: cfg.FailOverflow, maxInput: cfg.MaxInputTokens, maxCost: cfg.MaxCostUSD, estimateBound: cfg.EstimateBound, includeHidden: cfg.IncludeHidden}
+	if o.estimateBound == "" {
+		o.estimateBound = "expected"
+	}
 	if o.processing == "" {
 		o.processing = "native"
 	}
@@ -188,6 +191,7 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 	fs.StringVar(&o.catalogPath, "catalog", o.catalogPath, "JSON model-catalog override")
 	fs.Int64Var(&o.maxInput, "max-input-tokens", o.maxInput, "fail when any model exceeds this input budget")
 	fs.StringVar(&o.maxCost, "max-cost-usd", o.maxCost, "fail when any expected scenario exceeds this cost")
+	fs.StringVar(&o.estimateBound, "estimate-bound", o.estimateBound, "estimate risk bound for limits and costs: expected or high")
 	fs.BoolVar(&o.failIncomplete, "fail-incomplete", o.failIncomplete, "fail when any source could not be scanned")
 	fs.BoolVar(&o.failOverflow, "fail-overflow", o.failOverflow, "fail when input exceeds a context window")
 	_ = fs.String("config", "", "configuration file")
@@ -208,6 +212,10 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 	}
 	if !oneOf(o.documentDetail, "auto", "text", "low", "high") {
 		a.error(fmt.Errorf("invalid --document-detail %q", o.documentDetail))
+		return ExitUsage
+	}
+	if !oneOf(o.estimateBound, "expected", "high") {
+		a.error(fmt.Errorf("--estimate-bound must be expected or high"))
 		return ExitUsage
 	}
 	overrides := make([]tokeneyes.ProcessingOverride, 0, len(cfg.Overrides))
@@ -330,7 +338,7 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 		fmt.Fprintf(a.Stderr, "tokeneyes: verification media (%d bytes): %s\n", n, strings.Join(labels, ", "))
 	}
 	engine := tokeneyes.NewEngine(catalog)
-	run, err := engine.Analyze(ctx, tokeneyes.AnalyzeRequest{Collection: collection, Models: models, OutputTokens: outputs, ReasoningTokens: o.reasoning, CachedTokens: o.cached, System: o.system, Tools: o.tools, Profile: o.profile, Verify: o.verify, RequireVerify: o.requireVerify, Workers: o.workers, Preset: o.preset, Processing: o.processing, ImageDetail: o.imageDetail, DocumentDetail: o.documentDetail, AllowFileUpload: o.allowFileUpload, Overrides: overrides})
+	run, err := engine.Analyze(ctx, tokeneyes.AnalyzeRequest{Collection: collection, Models: models, OutputTokens: outputs, ReasoningTokens: o.reasoning, CachedTokens: o.cached, System: o.system, Tools: o.tools, Profile: o.profile, Verify: o.verify, RequireVerify: o.requireVerify, Workers: o.workers, Preset: o.preset, Processing: o.processing, ImageDetail: o.imageDetail, DocumentDetail: o.documentDetail, AllowFileUpload: o.allowFileUpload, EstimateBound: o.estimateBound, Overrides: overrides})
 	if err != nil {
 		a.error(err)
 		if o.requireVerify {
@@ -369,14 +377,14 @@ func (a *App) runAnalysis(ctx context.Context, command string, args []string, cf
 func thresholdExit(run tokeneyes.Run, o analysisOptions) int {
 	if o.failOverflow {
 		for _, r := range run.Results {
-			if r.InputTokens > r.ContextWindow {
+			if r.DecisionInputTokens > r.ContextWindow {
 				return ExitOverflow
 			}
 		}
 	}
 	if o.maxInput > 0 {
 		for _, r := range run.Results {
-			if r.InputTokens > o.maxInput {
+			if r.DecisionInputTokens > o.maxInput {
 				return ExitTokenBudget
 			}
 		}
@@ -580,8 +588,21 @@ func printRunDetails(w io.Writer, run tokeneyes.Run, saved, showWarnings bool) {
 		fmt.Fprintf(w, "\n%s [%s; %s]\n", result.Model, result.CounterMethod, result.CapabilityStatus)
 		if result.InputLow == result.InputHigh {
 			fmt.Fprintf(w, "  Input:   %d tokens\n", result.InputTokens)
-		} else {
+		} else if result.Confidence > 0 {
 			fmt.Fprintf(w, "  Input:   %d tokens (range %d–%d, %.0f%% confidence)\n", result.InputTokens, result.InputLow, result.InputHigh, result.Confidence*100)
+		} else {
+			fmt.Fprintf(w, "  Input:   %d tokens (heuristic range %d–%d; coverage not calibrated)\n", result.InputTokens, result.InputLow, result.InputHigh)
+		}
+		decisionTokens := result.DecisionInputTokens
+		if result.EstimateBound == "" && decisionTokens == 0 {
+			decisionTokens = result.InputTokens
+		}
+		if decisionTokens != result.InputTokens {
+			policy := result.EstimateBound + " bound"
+			if result.Verification.Method != "" && result.Verification.Error == "" {
+				policy = "official verification"
+			}
+			fmt.Fprintf(w, "  Policy:  %s uses %d tokens for limits and costs\n", policy, decisionTokens)
 		}
 		fmt.Fprintf(w, "  Context: %.2f%% of %d\n", result.ContextUtilization*100, result.ContextWindow)
 		fmt.Fprintln(w, "  Costs:")

@@ -73,6 +73,24 @@ func TestThresholdExitCodes(t *testing.T) {
 	}
 }
 
+func TestThresholdExitUsesSelectedDecisionBound(t *testing.T) {
+	run := tokeneyes.Run{Results: []tokeneyes.ModelResult{{InputTokens: 90, InputHigh: 120, DecisionInputTokens: 120, ContextWindow: 100}}}
+	if got := thresholdExit(run, analysisOptions{failOverflow: true}); got != ExitOverflow {
+		t.Fatalf("overflow code=%d", got)
+	}
+	if got := thresholdExit(run, analysisOptions{maxInput: 110}); got != ExitTokenBudget {
+		t.Fatalf("budget code=%d", got)
+	}
+}
+
+func TestEstimateBoundValidation(t *testing.T) {
+	app, _, stderr, _ := testApp(t, "")
+	code := app.Execute(context.Background(), []string{"estimate", "--prompt", "hello", "--estimate-bound", "median", "--no-save"})
+	if code != ExitUsage || !strings.Contains(stderr.String(), "expected or high") {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+}
+
 func TestStdinAndConfigFlagOverride(t *testing.T) {
 	app, stdout, stderr, root := testApp(t, "from stdin")
 	config := filepath.Join(root, "custom.yaml")

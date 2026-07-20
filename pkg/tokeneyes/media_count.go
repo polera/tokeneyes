@@ -187,13 +187,20 @@ func planMedia(model Model, sources []Source, counter TokenCounter, processing, 
 			out.Plan = append(out.Plan, PlannedPart{Source: s.Label, ProviderType: "text", Processing: "normalized-text"})
 		}
 		var sr Count
+		confidenceSet := false
 		for _, c := range out.Components[before:] {
 			if c.Unit == "tokens" {
 				sr.Tokens += c.Expected
 				sr.Low += c.Low
 				sr.High += c.High
-				if c.Confidence > 0 && (sr.Confidence == 0 || c.Confidence < sr.Confidence) {
+				if !confidenceSet || c.Confidence < sr.Confidence {
 					sr.Confidence = c.Confidence
+					confidenceSet = true
+				}
+				if sr.FormulaVersion == "" {
+					sr.FormulaVersion = c.FormulaVersion
+				} else if sr.FormulaVersion != c.FormulaVersion {
+					sr.FormulaVersion = "mixed"
 				}
 			}
 		}
@@ -210,7 +217,11 @@ func appendTextComponent(out *mediaPlan, model Model, counter TokenCounter, s So
 		out.Warnings = append(out.Warnings, s.Label+": "+err.Error())
 		return
 	}
-	out.Components = append(out.Components, CountComponent{AssetID: s.AssetID, Source: s.Label, Modality: "text", Unit: "tokens", Low: c.Low, Expected: c.Tokens, High: c.High, Method: method + " / " + c.Method, Confidence: c.Confidence, FormulaVersion: CatalogVersion + ":" + model.Tokenizer, Processing: "normalized-text"})
+	formula := c.FormulaVersion
+	if formula == "" {
+		formula = CatalogVersion + ":" + model.Tokenizer
+	}
+	out.Components = append(out.Components, CountComponent{AssetID: s.AssetID, Source: s.Label, Modality: "text", Unit: "tokens", Low: c.Low, Expected: c.Tokens, High: c.High, Method: method + " / " + c.Method, Confidence: c.Confidence, FormulaVersion: formula, Processing: "normalized-text"})
 }
 func markUnsupported(out *mediaPlan, s Source, msg string) {
 	out.Status = "unsupported"
